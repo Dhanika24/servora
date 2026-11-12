@@ -1,0 +1,12 @@
+rules_version = '2';
+service firebase.storage {
+ match /b/{bucket}/o {
+  match /photos/{uid}/{job}/{name} {
+   function record(){return firestore.get(/databases/(default)/documents/jobs/$(job)).data;}
+   function published(){return firestore.exists(/databases/(default)/documents/providers/$(uid)/work/$(job)) && firestore.get(/databases/(default)/documents/providers/$(uid)/work/$(job)).data.result == 'photos/'+uid+'/'+job+'/'+name;}
+   function eligible(){return record().status=='open' && record().owner==uid && firestore.exists(/databases/(default)/documents/providers/$(request.auth.uid)) && firestore.get(/databases/(default)/documents/providers/$(request.auth.uid)).data.category==record().category;}
+   allow get: if request.auth!=null && (request.auth.uid==uid || record().owner==request.auth.uid || record().assigned==request.auth.uid || eligible() || published());
+   allow create: if request.auth != null && request.auth.uid == uid && request.resource.size < 8*1024*1024 && request.resource.contentType.matches('image/(jpeg|png|webp)');
+  }
+ }
+}

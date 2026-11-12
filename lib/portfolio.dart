@@ -1,0 +1,5 @@
+part of 'main.dart';
+
+class Profile extends StatelessWidget{final String id;const Profile({required this.id,super.key});
+  @override Widget build(BuildContext c){final ref=db.collection('providers').doc(id);return StreamBuilder(stream:ref.snapshots(),builder:(c,s){final p=s.data?.data();return page('Provider profile',[if(p==null)Text(s.hasError?'Profile unavailable':s.hasData?'Create your service profile first.':'Loading…') else ...[Text(p['name'],style:Theme.of(c).textTheme.headlineMedium),Text('${p['category']} · ${p['area']} · ${p['available']?'Available':'Unavailable'}\nFrom LKR ${p['price']} · ${p['years']} years of experience'),card('${p['level']} · ${p['points']} points','${p['fee']}% service charge · ${p['jobs']} completed · ${p['jobs']==0?'No ratings':(p['stars']/p['jobs']).toStringAsFixed(1)+'/5'}'),const Text('Work and customer feedback'),rows(ref.collection('work'),(_,w)=>Column(children:[card(w['title'],'${w['summary']}\n${w['stars']}/5 · ${w['feedback']}'),photoView(w['result'])]))]]);});}
+}

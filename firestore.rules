@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{db}/documents {
+  function signed(){return request.auth != null;}
+  function mine(uid){return signed() && request.auth.uid == uid;}
+  function provider(){return signed() && exists(/databases/$(db)/documents/providers/$(request.auth.uid));}
+  match /members/{uid}{allow read: if mine(uid);}
+  match /providers/{uid}{allow read: if signed(); match /work/{job}{allow read: if signed();}}
+  match /devices/{uid}{allow delete: if mine(uid); allow create, update: if mine(uid) && request.resource.data.keys().hasOnly(['token']) && request.resource.data.token is string;}
+  match /jobs/{jid}{
+   allow read: if signed() && (mine(resource.data.owner) || mine(resource.data.assigned) || (provider() && resource.data.status=='open' && resource.data.category==get(/databases/$(db)/documents/providers/$(request.auth.uid)).data.category));
+   match /quotes/{uid}{allow read: if mine(uid) || mine(get(/databases/$(db)/documents/jobs/$(jid)).data.owner);}
+  }
+ }
+}
