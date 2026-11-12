@@ -19,7 +19,7 @@ double predictedRating(RowData provider, RowData? job) {
 }
 double score(RowData p,RowData? job,String priority){
   final jobs=p['jobs'] as num,km=job==null?0.0:distance(p,job);
-  final fit=job==null?1.0:math.min(1.0,job['budget']/p['price']).toDouble();
+  final fit=job==null?1.0:math.min(1.0,(job['budget'] as num)/(p['price'] as num)).toDouble();
   final near=1/(1+km/10),quality=predictedRating(p,job);
   final performance=(p['ontime']+p['quick']+p['verified']+3)/(3*jobs+6);
   return 0.13*fit+0.13*near+0.18*quality+0.15*performance+0.06*math.min(1,jobs/20)+0.03*p['visibility']+0.29*(priority=='Budget'?fit:priority=='Distance'?near:quality);
