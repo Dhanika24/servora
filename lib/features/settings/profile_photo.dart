@@ -1,3 +1,4 @@
+
 part of '../../main.dart';
 
 class AccountProfilePhoto extends StatefulWidget {
@@ -64,6 +65,19 @@ class _AccountProfilePhotoState extends State<AccountProfilePhoto> {
         throw Exception(
           'The image is too large. Select a smaller image.',
         );
+      }
+
+      if (!mounted) return;
+
+      try {
+        final decodedImage = await decodeImageFromList(bytes);
+        decodedImage.dispose();
+      } catch (_) {
+        showMessage(
+          'Unable to read the selected image. '
+          'Please choose a valid photograph.',
+        );
+        return;
       }
 
       if (!mounted) return;
