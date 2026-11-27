@@ -1,53 +1,143 @@
-import 'dart:math' as math;
-import 'dart:typed_data';
+import 'dart:async' show StreamSubscription, unawaited;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-part 'accounts.dart';
-part 'dashboard.dart';
-part 'requests.dart';
-part 'jobs.dart';
-part 'discovery.dart';
-part 'portfolio.dart';
+import 'firebase_options.dart';
+import 'core/validators/validation.dart';
+import 'repositories/command_repository.dart';
+import 'services/recommendation_service.dart';
+import 'app/theme/servora_theme.dart';
 
-typedef RowData = Map<String,dynamic>;
-const categories=['Plumbing','Electrical','Painting','Carpentry','Masonry','Gardening','Cleaning','Mechanic'];
-const ink=Color(0xff173d39);
-final db=FirebaseFirestore.instance;
-String get uid=>FirebaseAuth.instance.currentUser!.uid;
+part 'features/authentication/accounts.dart';
+part 'app/dashboard.dart';
+part 'app/customer_dashboard.dart';
+part 'app/provider_dashboard.dart';
+part 'features/customer/requests.dart';
+part 'features/jobs/jobs.dart';
+part 'features/recommendations/discovery.dart';
+part 'features/portfolio/portfolio.dart';
+part 'features/jobs/contacts.dart';
+part 'features/notifications/notifications.dart';
+part 'features/settings/settings.dart';
+part 'features/authentication/security.dart';
+part 'features/authentication/recovery.dart';
+part 'features/settings/profile_photo.dart';
+part 'features/provider/services.dart';
+part 'features/jobs/timestamps.dart';
+part 'features/earnings/earnings.dart';
+part 'features/settings/preferences.dart';
+part 'features/notifications/notification_settings.dart';
+part 'features/settings/location_settings.dart';
+part 'features/settings/information.dart';
+part 'app/servora_app.dart';
+part 'app/welcome.dart';
+part 'app/branding/servora_brand.dart';
+part 'core/widgets/shared_widgets.dart';
+part 'core/widgets/service_icons.dart';
+part 'core/widgets/hero_banner.dart';
+
+typedef RowData = Map<String, dynamic>;
+
+const categories = [
+  'Plumbing',
+  'Electrical',
+  'Painting',
+  'Carpentry',
+  'Masonry',
+  'Gardening',
+  'Cleaning',
+  'Mechanic',
+];
+
+const ink = Color(0xff173d39);
+
+final db = FirebaseFirestore.instance;
+
+String get uid => FirebaseAuth.instance.currentUser!.uid;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {await Firebase.initializeApp(); runApp(const Servora());}
-  catch(e){runApp(MaterialApp(home:Scaffold(body:Center(child:Text('Firebase setup required. See the repository README.\n$e')))));}
+
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+
+    await appPreferences.load();
+
+    runApp(
+      ValueListenableBuilder<ThemeMode>(
+        valueListenable: appPreferences.themeMode,
+        builder: (context, mode, child) {
+          return Servora(themeMode: mode);
+        },
+      ),
+    );
+  } catch (e) {
+    debugPrint(
+      'Servora initialization failed (${e.runtimeType}).',
+    );
+
+    runApp(
+      const MaterialApp(
+        title: 'Servora',
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          body: SafeArea(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.cloud_off_outlined,
+                      size: 56,
+                    ),
+                    SizedBox(height: 20),
+                    Text(
+                      'Unable to start Servora',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Please check your internet connection '
+                      'and restart the application.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
-class Servora extends StatelessWidget {
-  const Servora({super.key});
-  @override Widget build(BuildContext context)=>MaterialApp(title:'Servora',theme:ThemeData(colorScheme:ColorScheme.fromSeed(seedColor:ink),scaffoldBackgroundColor:const Color(0xfff6f7f2),useMaterial3:true,inputDecorationTheme:const InputDecorationTheme(border:OutlineInputBorder())),home:StreamBuilder(stream:FirebaseAuth.instance.authStateChanges(),builder:(c,s){
-    if(s.connectionState==ConnectionState.waiting)return const Center(child:CircularProgressIndicator());
-    if(s.data==null)return const Login();
-    return StreamBuilder(stream:db.collection('members').doc(s.data!.uid).snapshots(),builder:(c,m){
-      if(m.hasError)return page('Account',[Text('${m.error}'),action('Sign out',()=>FirebaseAuth.instance.signOut())]);
-      if(!m.hasData)return const Center(child:CircularProgressIndicator());
-      final member=m.data!.data();return member==null?const Register():Home(member:member);
-    });
-  }));
+
+final CommandRepository commandRepository = FirestoreCommandRepository(
+  db: db,
+  auth: FirebaseAuth.instance,
+  categories: categories,
+  offersService: (provider, category) => offersService(provider, category),
+  availableForService: (provider, category) =>
+      availableForService(provider, category),
+);
+
+Future<void> send(String name, RowData data) {
+  return commandRepository.send(name, data);
 }
-Widget page(String title,List<Widget> children)=>Scaffold(appBar:AppBar(title:Text(title)),body:SafeArea(child:ListView(padding:const EdgeInsets.all(20),children:[for(final w in children) Padding(padding:const EdgeInsets.only(bottom:14),child:w)])));
-Widget action(String text,VoidCallback fn)=>FilledButton(onPressed:fn,child:Text(text));
-Widget card(String title,String detail,[VoidCallback? fn])=>Card(child:ListTile(title:Text(title),subtitle:Text(detail),onTap:fn,trailing:fn==null?null:const Icon(Icons.chevron_right)));
-void go(BuildContext c,Widget w)=>Navigator.push(c,MaterialPageRoute(builder:(_)=>w));
-Future<void> handle(BuildContext c,Future<void> Function() fn)async{try{await fn();}catch(e){if(c.mounted)ScaffoldMessenger.of(c).showSnackBar(SnackBar(content:Text('$e')));}}
-Future<void> send(String name,RowData data)async{await FirebaseFunctions.instance.httpsCallable('command').call({'action':name,...data});}
-Widget rows(Query<RowData> q,Widget Function(String,RowData) item)=>StreamBuilder(stream:q.snapshots(),builder:(c,s){
-  if(s.hasError)return Text('${s.error}');if(!s.hasData)return const LinearProgressIndicator();
-  if(s.data!.docs.isEmpty)return const Text('No entries yet.');
-  return Column(children:[for(final d in s.data!.docs)item(d.id,d.data())]);
-});

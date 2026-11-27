@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "29147980088",
+    "project_id": "servora-9f9db",
+    "storage_bucket": "servora-9f9db.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:29147980088:android:972c51eeedff9d9044a1cd",
+        "android_client_info": {
+          "package_name": "com.example.servora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBt7jWIv63gmPLm7u1BsWGc391HLTQs_rw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

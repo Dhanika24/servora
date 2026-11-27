@@ -1,15 +1,1091 @@
 rules_version = '2';
+
 service cloud.firestore {
- match /databases/{db}/documents {
-  function signed(){return request.auth != null;}
-  function mine(uid){return signed() && request.auth.uid == uid;}
-  function provider(){return signed() && exists(/databases/$(db)/documents/providers/$(request.auth.uid));}
-  match /members/{uid}{allow read: if mine(uid);}
-  match /providers/{uid}{allow read: if signed(); match /work/{job}{allow read: if signed();}}
-  match /devices/{uid}{allow delete: if mine(uid); allow create, update: if mine(uid) && request.resource.data.keys().hasOnly(['token']) && request.resource.data.token is string;}
-  match /jobs/{jid}{
-   allow read: if signed() && (mine(resource.data.owner) || mine(resource.data.assigned) || (provider() && resource.data.status=='open' && resource.data.category==get(/databases/$(db)/documents/providers/$(request.auth.uid)).data.category));
-   match /quotes/{uid}{allow read: if mine(uid) || mine(get(/databases/$(db)/documents/jobs/$(jid)).data.owner);}
+  match /databases/{db}/documents {
+
+    function signed() {
+      return request.auth != null;
+    }
+
+    function mine(uid) {
+      return signed() && request.auth.uid == uid;
+    }
+
+    function provider() {
+      return signed() &&
+        exists(/databases/$(db)/documents/providers/$(request.auth.uid));
+    }
+
+    function member() {
+      return get(/databases/$(db)/documents/members/$(request.auth.uid)).data;
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function hasCurrentJobContact(jid, contactUid) {
+      return existsAfter(
+        /databases/$(db)/documents/jobs/$(jid)/contacts/$(contactUid)
+      )
+      && existsAfter(
+        /databases/$(db)/documents/privateContacts/$(contactUid)
+      )
+      && getAfter(
+        /databases/$(db)/documents/jobs/$(jid)/contacts/$(contactUid)
+      ).data.phone == getAfter(
+        /databases/$(db)/documents/privateContacts/$(contactUid)
+      ).data.phone;
+    }
+
+    function jobImageReference(jid, imageId) {
+      return 'jobs/' + jid + '/images/' + imageId;
+    }
+
+    function validImageReference(jid, imageId, value) {
+      return value is string
+        && (
+          value == ''
+          || (
+            value == jobImageReference(jid, imageId)
+            && existsAfter(
+              /databases/$(db)/documents/jobs/$(jid)/images/$(imageId)
+            )
+          )
+        );
+    }
+
+    function validCategory(category) {
+      return category in [
+        'Plumbing',
+        'Electrical',
+        'Painting',
+        'Carpentry',
+        'Masonry',
+        'Gardening',
+        'Cleaning',
+        'Mechanic'
+      ];
+    }
+
+    function providerOffers(p, category) {
+      return p.get('services', null) is map
+        ? category in p.services
+        : p.category == category;
+    }
+
+    function providerAvailable(p, category) {
+      return providerOffers(p, category)
+        && (
+          p.get('services', null) is map
+            ? p.services[category].available == true
+            : p.available == true
+        );
+    }
+
+    function validServiceEntry(entry) {
+      return entry is map
+        && entry.keys().hasAll([
+          'price', 'years', 'available'
+        ])
+        && entry.keys().hasOnly([
+          'price', 'years', 'available'
+        ])
+        && entry.price is number
+        && entry.price >= 1
+        && entry.price <= 100000000
+        && entry.years is number
+        && entry.years >= 0
+        && entry.years <= 80
+        && entry.available is bool;
+    }
+
+    function validOptionalService(services, category) {
+      return !(category in services)
+        || validServiceEntry(services[category]);
+    }
+
+    function validServiceMap(d) {
+      return !('services' in d)
+        || (
+          d.services is map
+          && d.services.size() >= 1
+          && d.services.size() <= 8
+          && d.services.keys().hasOnly([
+            'Plumbing',
+            'Electrical',
+            'Painting',
+            'Carpentry',
+            'Masonry',
+            'Gardening',
+            'Cleaning',
+            'Mechanic'
+          ])
+          && validOptionalService(d.services, 'Plumbing')
+          && validOptionalService(d.services, 'Electrical')
+          && validOptionalService(d.services, 'Painting')
+          && validOptionalService(d.services, 'Carpentry')
+          && validOptionalService(d.services, 'Masonry')
+          && validOptionalService(d.services, 'Gardening')
+          && validOptionalService(d.services, 'Cleaning')
+          && validOptionalService(d.services, 'Mechanic')
+          && d.category in d.services
+          && d.price == d.services[d.category].price
+          && d.years == d.services[d.category].years
+          && d.available == d.services[d.category].available
+        );
+    }
+
+    function currentProvider() {
+      return get(
+        /databases/$(db)/documents/providers/$(request.auth.uid)
+      ).data;
+    }
+
+    function existingQuotation(jid) {
+      return signed()
+        && exists(
+          /databases/$(db)/documents/jobs/$(jid)/quotes/$(request.auth.uid)
+        );
+    }
+
+    function validCoordinates(d) {
+      return d.lat is number
+        && d.lat >= -90
+        && d.lat <= 90
+        && d.lng is number
+        && d.lng >= -180
+        && d.lng <= 180;
+    }
+
+    function roundedCoordinate(value) {
+      return math.floor(value * 100 + 0.5) / 100.0;
+    }
+
+    function validCoarseCoordinates(d) {
+      return validCoordinates(d)
+        && d.lat == roundedCoordinate(d.lat)
+        && d.lng == roundedCoordinate(d.lng);
+    }
+
+    function validExactLocation(d) {
+      return d.keys().hasAll(['lat', 'lng'])
+        && d.keys().hasOnly(['lat', 'lng'])
+        && validCoordinates(d);
+    }
+
+    function validPublicJobLocation(jid, job) {
+      let exact = getAfter(
+        /databases/$(db)/documents/jobs/$(jid)/locations/exact
+      ).data;
+
+      return validExactLocation(exact)
+        && validCoarseCoordinates(job)
+        && job.lat == roundedCoordinate(exact.lat)
+        && job.lng == roundedCoordinate(exact.lng);
+    }
+
+    function validEventTime(value) {
+      return value is int
+        && value >= request.time.toMillis() - 60000
+        && value <= request.time.toMillis() + 60000;
+    }
+
+    function rewardPoints(job) {
+      return 10
+        + (job.stars >= 4 ? 5 : 0)
+        + (job.finished <= job.due ? 4 : 0)
+        + (job.quick == true ? 3 : 0);
+    }
+
+    function rankLevel(points) {
+      return points >= 120
+        ? 'Gold'
+        : points >= 50
+          ? 'Silver'
+          : 'Bronze';
+    }
+
+    function rankFee(points) {
+      return points >= 120
+        ? 5
+        : points >= 50
+          ? 8
+          : 10;
+    }
+
+    function rankVisibility(points) {
+      return points >= 120
+        ? 2
+        : points >= 50
+          ? 1
+          : 0;
+    }
+
+    function beforeJob(jid) {
+      return get(
+        /databases/$(db)/documents/jobs/$(jid)
+      ).data;
+    }
+
+    function afterJob(jid) {
+      return getAfter(
+        /databases/$(db)/documents/jobs/$(jid)
+      ).data;
+    }
+
+    function beforeProvider(pid) {
+      return get(
+        /databases/$(db)/documents/providers/$(pid)
+      ).data;
+    }
+
+    function afterProvider(pid) {
+      return getAfter(
+        /databases/$(db)/documents/providers/$(pid)
+      ).data;
+    }
+
+    function validReviewTransition(jid, pid) {
+      let oldJob = beforeJob(jid);
+      let newJob = afterJob(jid);
+
+      return signed()
+        && mine(oldJob.owner)
+        && member().role == 'customer'
+        && oldJob.assigned == pid
+        && newJob.assigned == pid
+        && oldJob.status == 'awaiting review'
+        && newJob.status == 'completed'
+        && validEventTime(newJob.reviewedAt)
+        && newJob.stars is int
+        && newJob.stars >= 1
+        && newJob.stars <= 5
+        && validText(newJob.feedback, 500);
+    }
+
+    function validPortfolioEntry(jid, entry) {
+      let job = afterJob(jid);
+
+      return entry.keys().hasAll([
+          'title',
+          'feedback',
+          'stars',
+          'summary',
+          'result',
+          'created'
+        ])
+        && entry.keys().hasOnly([
+          'title',
+          'feedback',
+          'stars',
+          'summary',
+          'result',
+          'created'
+        ])
+        && entry.title == job.title
+        && entry.feedback == job.feedback
+        && entry.stars == job.stars
+        && entry.summary == job.summary
+        && entry.result == (
+          job.portfolioConsent == true
+            ? job.result
+            : ''
+        )
+        && entry.created is int
+        && entry.created >= request.time.toMillis() - 60000
+        && entry.created <= request.time.toMillis() + 60000;
+    }
+
+    function validHistoricalExamples(old, updated, job) {
+      let previous = old.get('examples', []);
+      let current = updated.get('examples', []);
+
+      return previous is list
+        && current is list
+        && previous.size() <= 30
+        && current.size() <= 30
+        && (
+          (
+            previous.size() < 30
+            && current == previous.concat([
+              {
+                'budget': job.budget,
+                'stars': job.stars
+              }
+            ])
+          )
+          ||
+          (
+            previous.size() == 30
+            && current == previous
+          )
+        );
+    }
+
+    function validRewardUpdate(pid, jid, old, updated) {
+      let job = afterJob(jid);
+      let points = old.points + rewardPoints(job);
+
+      return validReviewTransition(jid, pid)
+        && updated.lastReviewedJob == jid
+        && updated.points == points
+        && updated.jobs == old.jobs + 1
+        && updated.stars == old.stars + job.stars
+        && updated.ontime ==
+          old.ontime + (job.finished <= job.due ? 1 : 0)
+        && updated.quick ==
+          old.quick + (job.quick == true ? 1 : 0)
+        && updated.verified == old.verified
+        && updated.level == rankLevel(points)
+        && updated.fee == rankFee(points)
+        && updated.visibility == rankVisibility(points)
+        && validHistoricalExamples(old, updated, job)
+        && updated.diff(old).affectedKeys().hasOnly([
+          'points',
+          'jobs',
+          'stars',
+          'ontime',
+          'quick',
+          'level',
+          'fee',
+          'visibility',
+          'lastReviewedJob', 'examples'
+        ])
+        && !exists(
+          /databases/$(db)/documents/providers/$(pid)/work/$(jid)
+        )
+        && existsAfter(
+          /databases/$(db)/documents/providers/$(pid)/work/$(jid)
+        );
+    }
+
+    match /{path=**}/quotes/{quoteId} {
+      allow list: if signed()
+        && resource.data.provider == request.auth.uid;
+    }
+
+    match /profilePhotos/{uid} {
+
+      function validProfilePhoto() {
+        let d = request.resource.data;
+
+        return d.keys().hasAll(['bytes'])
+          && d.keys().hasOnly(['bytes'])
+          && d.bytes is bytes
+          && d.bytes.size() > 0
+          && d.bytes.size() <= 307200;
+      }
+
+      allow get: if mine(uid);
+
+      allow create, update: if mine(uid)
+        && exists(
+          /databases/$(db)/documents/members/$(uid)
+        )
+        && validProfilePhoto();
+
+      allow delete: if mine(uid);
+
+      allow list: if false;
+    }
+
+    match /privateContacts/{uid} {
+
+      allow get: if mine(uid);
+
+      allow create, update: if mine(uid)
+        && existsAfter(
+          /databases/$(db)/documents/members/$(uid)
+        )
+        && request.resource.data.keys().hasAll(['phone'])
+        && request.resource.data.keys().hasOnly(['phone'])
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('[+]947[0-9]{8}');
+
+    }
+
+    match /members/{uid} {
+
+      allow read: if mine(uid);
+
+      allow update: if mine(uid)
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['name'])
+        && request.resource.data.role == resource.data.role
+        && validText(request.resource.data.name, 80)
+        && (
+          resource.data.role != 'provider'
+          || !exists(
+            /databases/$(db)/documents/providers/$(uid)
+          )
+          || getAfter(
+            /databases/$(db)/documents/providers/$(uid)
+          ).data.name == request.resource.data.name
+        );
+
+      allow create: if mine(uid)
+        && request.resource.data.keys().hasAll(['name', 'role'])
+        && request.resource.data.keys().hasOnly(['name', 'role'])
+        && validText(request.resource.data.name, 80)
+        && request.resource.data.role in ['customer', 'provider']
+        && existsAfter(
+          /databases/$(db)/documents/privateContacts/$(uid)
+        );
+    }
+
+    match /providers/{uid} {
+
+      function validProfile() {
+        let d = request.resource.data;
+
+        return validText(d.name, 80)
+          && d.name == getAfter(
+            /databases/$(db)/documents/members/$(uid)
+          ).data.name
+          && validCategory(d.category)
+          && validText(d.area, 80)
+          && d.price is number
+          && d.price >= 1
+          && d.price <= 100000000
+          && d.years is number
+          && d.years >= 0
+          && d.years <= 80
+          && d.available is bool
+          && d.lat is number
+          && d.lat >= -90
+          && d.lat <= 90
+          && d.lng is number
+          && d.lng >= -180
+          && d.lng <= 180
+          && validServiceMap(d);
+      }
+
+      allow read: if signed();
+
+      allow create: if mine(uid)
+        && member().role == 'provider'
+        && validProfile()
+        && validCoarseCoordinates(request.resource.data)
+        && request.resource.data.keys().hasAll([
+          'name', 'category', 'area', 'price',
+          'years', 'available', 'lat', 'lng',
+          'points', 'jobs', 'stars', 'ontime',
+          'quick', 'verified', 'level', 'fee',
+          'visibility'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'category', 'area', 'price',
+          'years', 'available', 'lat', 'lng',
+          'points', 'jobs', 'stars', 'ontime',
+          'quick', 'verified', 'level', 'fee',
+          'visibility'
+        ])
+        && request.resource.data.points == 0
+        && request.resource.data.jobs == 0
+        && request.resource.data.stars == 0
+        && request.resource.data.ontime == 0
+        && request.resource.data.quick == 0
+        && request.resource.data.verified == 0
+        && request.resource.data.level == 'Bronze'
+        && request.resource.data.fee == 10
+        && request.resource.data.visibility == 0;
+
+      allow update: if (
+        mine(uid)
+        && member().role == 'provider'
+        && validProfile()
+        && (
+          !request.resource.data.diff(resource.data)
+            .affectedKeys().hasAny(['lat', 'lng'])
+          || validCoarseCoordinates(request.resource.data)
+        )
+        && (
+          !('services' in resource.data)
+          || 'services' in request.resource.data
+        )
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly([
+            'name',
+            'category',
+            'area',
+            'price',
+            'years',
+            'available',
+            'lat',
+            'lng',
+            'services'
+          ])
+        ) || (
+          signed()
+          && request.resource.data.lastReviewedJob is string
+          && validRewardUpdate(
+            uid,
+            request.resource.data.lastReviewedJob,
+            resource.data,
+            request.resource.data
+          )
+        );
+
+      match /work/{job} {
+
+        allow read: if signed();
+
+        allow create: if signed()
+          && validReviewTransition(job, uid)
+          && validPortfolioEntry(job, request.resource.data)
+          && afterProvider(uid).lastReviewedJob == job
+          && afterProvider(uid).jobs ==
+            beforeProvider(uid).jobs + 1;
+      }
+    }
+
+    match /devices/{uid} {
+
+      allow delete: if mine(uid);
+
+      allow create, update: if mine(uid)
+        && request.resource.data.keys().hasAll(['token'])
+        && request.resource.data.keys().hasOnly(['token'])
+        && request.resource.data.token is string;
+    }
+
+    match /jobs/{jid}/contacts/{contactUid} {
+
+      function contactJob() {
+        return get(
+          /databases/$(db)/documents/jobs/$(jid)
+        ).data;
+      }
+
+      function updatedContactJob() {
+        return getAfter(
+          /databases/$(db)/documents/jobs/$(jid)
+        ).data;
+      }
+
+      function activeContactJob(job) {
+        return job.status in [
+          'booked',
+          'in progress',
+          'awaiting review'
+        ];
+      }
+
+      function hasQuotation(pid) {
+        return exists(
+          /databases/$(db)/documents/jobs/$(jid)/quotes/$(pid)
+        );
+      }
+
+      function hasUpdatedQuotation(pid) {
+        return existsAfter(
+          /databases/$(db)/documents/jobs/$(jid)/quotes/$(pid)
+        );
+      }
+
+      function canReadContact() {
+        let job = contactJob();
+
+        return signed() && (
+          (
+            job.status == 'open'
+            && (
+              (
+                mine(job.owner)
+                && hasQuotation(contactUid)
+              )
+              ||
+              (
+                contactUid == job.owner
+                && hasQuotation(request.auth.uid)
+              )
+            )
+          )
+          ||
+          (
+            activeContactJob(job)
+            && (
+              (
+                mine(job.owner)
+                && contactUid == job.assigned
+              )
+              ||
+              (
+                mine(job.assigned)
+                && contactUid == job.owner
+              )
+            )
+          )
+        );
+      }
+
+      function canWriteContact() {
+        let job = updatedContactJob();
+
+        return mine(contactUid)
+          && (
+            (
+              job.status == 'open'
+              && (
+                contactUid == job.owner
+                || hasUpdatedQuotation(contactUid)
+              )
+            )
+            ||
+            (
+              activeContactJob(job)
+              && (
+                contactUid == job.owner
+                || contactUid == job.assigned
+              )
+            )
+          );
+      }
+
+      function validJobContact() {
+        return request.resource.data.keys().hasAll(['phone'])
+          && request.resource.data.keys().hasOnly(['phone'])
+          && request.resource.data.phone is string
+          && request.resource.data.phone.matches('[+]947[0-9]{8}')
+          && request.resource.data.phone == getAfter(
+            /databases/$(db)/documents/privateContacts/$(contactUid)
+          ).data.phone;
+      }
+
+      allow get: if mine(contactUid) || (
+        canReadContact()
+        && exists(
+          /databases/$(db)/documents/privateContacts/$(contactUid)
+        )
+        && resource.data.phone == get(
+          /databases/$(db)/documents/privateContacts/$(contactUid)
+        ).data.phone
+      );
+
+      allow create, update: if signed()
+        && canWriteContact()
+        && validJobContact();
+
+      allow list, delete: if false;
+    }
+
+    match /jobs/{jid}/locations/{locationId} {
+
+      function canReadExactLocation() {
+        let job = beforeJob(jid);
+
+        return signed()
+          && locationId == 'exact'
+          && (
+            mine(job.owner)
+            || (
+              mine(job.assigned)
+              && job.status in [
+                'booked',
+                'in progress',
+                'awaiting review'
+              ]
+            )
+          );
+      }
+
+      function canCreateExactLocation() {
+        let job = afterJob(jid);
+
+        return signed()
+          && locationId == 'exact'
+          && !exists(
+            /databases/$(db)/documents/jobs/$(jid)
+          )
+          && mine(job.owner)
+          && job.status == 'open'
+          && validExactLocation(request.resource.data)
+          && job.lat ==
+            roundedCoordinate(request.resource.data.lat)
+          && job.lng ==
+            roundedCoordinate(request.resource.data.lng);
+      }
+
+      allow get: if canReadExactLocation();
+
+      allow create: if canCreateExactLocation();
+
+      allow list, update, delete: if false;
+    }
+
+    match /jobs/{jid}/images/{imageId} {
+
+      function validImageData() {
+        let d = request.resource.data;
+
+        return d.keys().hasAll(['bytes'])
+          && d.keys().hasOnly(['bytes'])
+          && d.bytes is bytes
+          && d.bytes.size() > 0
+          && d.bytes.size() <= 307200;
+      }
+
+      function canReadImage() {
+        let job = beforeJob(jid);
+
+        return signed() && (
+          (
+            imageId == 'request'
+            && job.photo == jobImageReference(jid, imageId)
+            && (
+              mine(job.owner)
+              || mine(job.assigned)
+              || (
+                job.status == 'open'
+                && provider()
+                && (
+                  providerOffers(currentProvider(), job.category)
+                  || existingQuotation(jid)
+                )
+              )
+            )
+          )
+          ||
+          (
+            imageId == 'result'
+            && job.result == jobImageReference(jid, imageId)
+            && (
+              mine(job.owner)
+              || mine(job.assigned)
+              || (
+                job.status == 'completed'
+                && job.get('portfolioConsent', false) == true
+              )
+            )
+          )
+        );
+      }
+
+      function canCreateRequestImage() {
+        let job = afterJob(jid);
+
+        return imageId == 'request'
+          && !exists(
+            /databases/$(db)/documents/jobs/$(jid)
+          )
+          && mine(job.owner)
+          && job.status == 'open'
+          && job.photo == jobImageReference(jid, imageId);
+      }
+
+      function canCreateResultImage() {
+        let oldJob = beforeJob(jid);
+        let newJob = afterJob(jid);
+
+        return imageId == 'result'
+          && mine(oldJob.assigned)
+          && oldJob.status == 'in progress'
+          && newJob.status == 'awaiting review'
+          && newJob.assigned == oldJob.assigned
+          && newJob.result == jobImageReference(jid, imageId);
+      }
+
+      allow get: if canReadImage();
+
+      allow create: if signed()
+        && validImageData()
+        && (
+          canCreateRequestImage()
+          || canCreateResultImage()
+        );
+
+      allow list, update, delete: if false;
+    }
+
+    match /jobs/{jid} {
+
+      function selectedQuote(pid) {
+        return get(
+          /databases/$(db)/documents/jobs/$(jid)/quotes/$(pid)
+        ).data;
+      }
+
+      function validBooking() {
+        let d = request.resource.data;
+        let q = selectedQuote(d.assigned);
+
+        return resource.data.status == 'open'
+          && resource.data.assigned == ''
+          && mine(resource.data.owner)
+          && member().role == 'customer'
+          && d.status == 'booked'
+          && validEventTime(d.bookedAt)
+          && d.assigned is string
+          && d.assigned.size() > 0
+          && d.assigned != request.auth.uid
+          && q.provider == d.assigned
+          && d.providerName == q.name
+          && d.amount == q.amount
+          && d.quick is bool
+          && d.quick == (
+            q.created - resource.data.created <= 3600000
+          )
+          && d.due is int
+          && d.due >= d.bookedAt
+            + q.hours * 3600000 - 1
+          && d.due <= d.bookedAt
+            + q.hours * 3600000 + 1
+          && d.diff(resource.data)
+            .affectedKeys().hasOnly([
+              'status',
+              'assigned',
+              'providerName',
+              'amount',
+              'due',
+              'quick',
+              'bookedAt'
+            ]);
+      }
+
+      function validStart() {
+        let d = request.resource.data;
+
+        return mine(resource.data.assigned)
+          && member().role == 'provider'
+          && resource.data.status == 'booked'
+          && d.status == 'in progress'
+          && validEventTime(d.startedAt)
+          && d.diff(resource.data)
+            .affectedKeys().hasOnly([
+              'status',
+              'startedAt'
+            ]);
+      }
+
+      function validFinish() {
+        let d = request.resource.data;
+
+        return mine(resource.data.assigned)
+          && member().role == 'provider'
+          && resource.data.status == 'in progress'
+          && d.status == 'awaiting review'
+          && validText(d.summary, 500)
+          && validImageReference(jid, 'result', d.result)
+          && d.finished is int
+          && d.finished >= request.time.toMillis() - 60000
+          && d.finished <= request.time.toMillis() + 60000
+          && d.diff(resource.data)
+            .affectedKeys().hasOnly([
+              'status',
+              'summary',
+              'result',
+              'finished'
+            ]);
+      }
+
+      function validReview() {
+        let d = request.resource.data;
+        let pid = resource.data.assigned;
+        let p = beforeProvider(pid);
+        let updated = afterProvider(pid);
+
+        return validReviewTransition(jid, pid)
+          && d.portfolioConsent is bool
+          && (
+            d.portfolioConsent == false
+            || d.result == jobImageReference(jid, 'result')
+          )
+          && d.feePercent == p.fee
+          && d.serviceCharge is number
+          && d.serviceCharge >= 0
+          && d.serviceCharge >=
+            (resource.data.amount * p.fee / 100.0) - 0.005001
+          && d.serviceCharge <=
+            (resource.data.amount * p.fee / 100.0) + 0.005001
+          && d.diff(resource.data)
+            .affectedKeys().hasOnly([
+              'status',
+              'stars',
+              'feedback',
+              'feePercent',
+              'serviceCharge',
+              'portfolioConsent',
+              'reviewedAt'
+            ])
+          && validRewardUpdate(pid, jid, p, updated);
+      }
+
+      allow read: if signed() && (
+        mine(resource.data.owner)
+        || mine(resource.data.assigned)
+        || (
+          provider()
+          && resource.data.status == 'open'
+          && providerOffers(
+            currentProvider(),
+            resource.data.category
+          )
+        )
+      );
+
+      allow get: if signed()
+        && provider()
+        && resource.data.status == 'open'
+        && existingQuotation(jid);
+
+      allow update: if signed() && (
+        validStart()
+        || validFinish()
+        || validBooking()
+        || validReview()
+      );
+
+      allow create: if signed()
+        && member().role == 'customer'
+        && request.resource.data.keys().hasAll([
+          'owner', 'name', 'category', 'title',
+          'description', 'area', 'budget',
+          'lat', 'lng', 'emergency', 'photo',
+          'status', 'assigned', 'created'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'owner', 'name', 'category', 'title',
+          'description', 'area', 'budget',
+          'lat', 'lng', 'emergency', 'photo',
+          'status', 'assigned', 'created'
+        ])
+        && request.resource.data.owner == request.auth.uid
+        && hasCurrentJobContact(jid, request.auth.uid)
+        && validPublicJobLocation(
+          jid,
+          request.resource.data
+        )
+        && request.resource.data.name == member().name
+        && validCategory(request.resource.data.category)
+        && validText(request.resource.data.title, 100)
+        && validText(request.resource.data.description, 500)
+        && validText(request.resource.data.area, 80)
+        && request.resource.data.budget is number
+        && request.resource.data.budget >= 1
+        && request.resource.data.budget <= 100000000
+        && request.resource.data.lat is number
+        && request.resource.data.lat >= -90
+        && request.resource.data.lat <= 90
+        && request.resource.data.lng is number
+        && request.resource.data.lng >= -180
+        && request.resource.data.lng <= 180
+        && request.resource.data.emergency is bool
+        && (
+          request.resource.data.emergency == false
+          || request.resource.data.category == 'Mechanic'
+        )
+        && validImageReference(
+          jid,
+          'request',
+          request.resource.data.photo
+        )
+        && request.resource.data.status == 'open'
+        && request.resource.data.assigned == ''
+        && request.resource.data.created is int
+        && request.resource.data.created >=
+          request.time.toMillis() - 60000
+        && request.resource.data.created <=
+          request.time.toMillis() + 60000;
+
+      match /quotes/{uid} {
+
+        function jobData() {
+          return get(
+            /databases/$(db)/documents/jobs/$(jid)
+          ).data;
+        }
+
+        function providerData() {
+          return get(
+            /databases/$(db)/documents/providers/$(uid)
+          ).data;
+        }
+
+        function eligibleProvider() {
+          return mine(uid)
+            && member().role == 'provider'
+            && provider()
+            && jobData().status == 'open'
+            && getAfter(
+              /databases/$(db)/documents/jobs/$(jid)
+            ).data.status == 'open'
+            && jobData().owner != uid
+            && providerAvailable(
+              providerData(),
+              jobData().category
+            );
+        }
+
+        function validQuote() {
+          let d = request.resource.data;
+
+          return d.keys().hasAll([
+              'provider',
+              'name',
+              'amount',
+              'hours',
+              'note',
+              'created'
+            ])
+            && d.keys().hasOnly([
+              'provider',
+              'name',
+              'amount',
+              'hours',
+              'note',
+              'created',
+              'updatedAt'
+            ])
+            && d.provider == uid
+            && validText(d.name, 80)
+            && d.amount is number
+            && d.amount >= 1
+            && d.amount <= 100000000
+            && d.hours is number
+            && d.hours >= 1
+            && d.hours <= 720
+            && validText(d.note, 500)
+            && d.created is int;
+        }
+
+        allow read: if mine(uid)
+          || mine(jobData().owner);
+
+        allow create: if eligibleProvider()
+          && hasCurrentJobContact(jid, uid)
+          && validQuote()
+          && request.resource.data.name == member().name
+          && !('updatedAt' in request.resource.data)
+          && request.resource.data.created >=
+            request.time.toMillis() - 60000
+          && request.resource.data.created <=
+            request.time.toMillis() + 60000;
+
+        allow update: if eligibleProvider()
+          && hasCurrentJobContact(jid, uid)
+          && validQuote()
+          && request.resource.data.created ==
+            resource.data.created
+          && validEventTime(request.resource.data.updatedAt)
+          && request.resource.data.diff(resource.data)
+            .affectedKeys().hasOnly([
+              'amount',
+              'hours',
+              'note',
+              'updatedAt'
+            ]);
+
+        allow delete: if mine(uid)
+          && resource.data.provider == request.auth.uid
+          && member().role == 'provider'
+          && jobData().status == 'open'
+          && getAfter(
+            /databases/$(db)/documents/jobs/$(jid)
+          ).data.status == 'open';
+      }
+    }
   }
- }
 }
