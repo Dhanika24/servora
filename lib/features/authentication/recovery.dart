@@ -1,3 +1,4 @@
+
 part of '../../main.dart';
 
 class PasswordRecovery extends StatefulWidget {
@@ -28,7 +29,7 @@ class _PasswordRecoveryState extends State<PasswordRecovery> {
   }
 
   Future<void> resetPassword() async {
-    if (busy) return;
+    if (busy || sent) return;
 
     final email = emailController.text.trim();
 
@@ -36,6 +37,8 @@ class _PasswordRecoveryState extends State<PasswordRecovery> {
       showMessage('Enter a valid email address.');
       return;
     }
+
+    FocusScope.of(context).unfocus();
 
     setState(() => busy = true);
 
@@ -83,6 +86,14 @@ class _PasswordRecoveryState extends State<PasswordRecovery> {
     }
   }
 
+  void useDifferentEmail() {
+    if (busy || !sent) return;
+
+    emailController.clear();
+
+    setState(() => sent = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -120,6 +131,9 @@ class _PasswordRecoveryState extends State<PasswordRecovery> {
               controller: emailController,
               enabled: !busy,
               keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.done,
+              textCapitalization: TextCapitalization.none,
+              enableSuggestions: false,
               autocorrect: false,
               autofillHints: const [AutofillHints.email],
               decoration: const InputDecoration(
@@ -137,6 +151,12 @@ class _PasswordRecoveryState extends State<PasswordRecovery> {
             ),
             if (busy) const LinearProgressIndicator(),
           ]),
+        if (sent && !busy)
+          OutlinedButton.icon(
+            onPressed: useDifferentEmail,
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Use a different email address'),
+          ),
         const SizedBox(height: 20),
         OutlinedButton.icon(
           onPressed: busy ? null : () => Navigator.pop(context),
